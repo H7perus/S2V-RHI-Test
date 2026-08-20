@@ -1,23 +1,23 @@
 ﻿global using static S2vDevice;
-using OpenTK.Windowing.GraphicsLibraryFramework;
-using Renderer;
-using Silk.NET.Core.Native;
-using Silk.NET.Vulkan;
-using Silk.NET.Vulkan.Extensions.KHR;
-using Silk.NET.Windowing;
+
+using Vortice.Vulkan;
+using static Vortice.Vulkan.Vulkan;
+
+using SDL;
+using static SDL.SDL3;
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-using SilkVk = Silk.NET.Vulkan;
 
 
 public static class S2vDevice
 {
     public static S2V_RHI_Test.RHI.VK.Device? Device { get; private set; }
 
-    public static void createS2vDevice(IWindow window)
+    unsafe public static void createS2vDevice(SDL_Window* window)
     {
         if (Device == null)
         {
@@ -43,167 +43,167 @@ namespace S2V_RHI_Test.RHI.VK
 
     public class Device
     {
-        SilkVk.Instance VkInstance;
-        SilkVk.Device VkDevice;
-        SilkVk.PhysicalDevice VkPhysicalDevice;
-        SilkVk.SurfaceKHR VkSurfaceKHR;
+        VkInstanceApi VkInstanceApi;
+        VkDeviceApi VkDeviceApi;
+        VkPhysicalDevice VkPhysicalDevice;
+        VkSurfaceKHR VkSurfaceKHR;
 
-        SilkVk.Queue GraphicsQueue;
-        SilkVk.Queue TransferQueue;
+        VkQueue GraphicsQueue;
+        VkQueue TransferQueue;
 
-        unsafe public Device(IWindow window)
+        unsafe public Device(SDL_Window* window)
         {
+            vkInitialize();
 
-            if (window.VkSurface is null)
-                throw new Exception("windowing platform doesn't support Vulkan surfaces");
+            VkUtf8String appName = "S2v"u8;
+            VkUtf8String engineName = "S2vEngine"u8;
 
-            var appInfo = new SilkVk.ApplicationInfo
+            var appInfo = new VkApplicationInfo
             {
-                SType = SilkVk.StructureType.ApplicationInfo,
-                PApplicationName = (byte*)Marshal.StringToHGlobalAnsi("S2V"),
-                ApplicationVersion = SilkVk.Vk.MakeVersion(1, 0, 0),
-                PEngineName = (byte*)Marshal.StringToHGlobalAnsi("S2VEngine"),
-                EngineVersion = SilkVk.Vk.MakeVersion(20, 0, 0),
-                ApiVersion = SilkVk.Vk.Version13
+                pApplicationName = appName,
+                applicationVersion = new VkVersion(1, 0, 0),
+                pEngineName = engineName,
+                engineVersion = new VkVersion(20, 0, 0),
+                apiVersion = VkVersion.Version_1_3
             };
 
-            var glfwExtensions = window.VkSurface!.GetRequiredExtensions(out uint extensionCount);
-
-            var extensionNames = Silk.NET.Core.Native.SilkMarshal.PtrToStringArray((nint)glfwExtensions, (int)extensionCount);
-            foreach (var name in extensionNames)
-                Console.WriteLine($"Enabling instance extension: {name}");
 
 
-            var validationLayers = new[] { "VK_LAYER_KHRONOS_validation" };
-            var layerNamesPtr = (byte**)Silk.NET.Core.Native.SilkMarshal.StringArrayToPtr(validationLayers);
+            var layerNamesPtr = (byte*)Marshal.StringToHGlobalAnsi("VK_LAYER_KHRONOS_validation");
 
-            var instanceCreateInfo = new SilkVk.InstanceCreateInfo
+            string[] layerNames = new string[] { "VK_LAYER_KHRONOS_validation" };
+
+            VkStringArray VkLayerNames = new VkStringArray(layerNames);
+
+            uint sdlExtensionCount = 0;
+            byte** sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
+
+            var instanceCreateInfo = new VkInstanceCreateInfo
             {
-                SType = SilkVk.StructureType.InstanceCreateInfo,
-                EnabledLayerCount = 1,
-                PpEnabledLayerNames = layerNamesPtr,
-                EnabledExtensionCount = extensionCount,
-                PpEnabledExtensionNames = glfwExtensions,
-                PApplicationInfo = &appInfo
+                enabledLayerCount = VkLayerNames.Length,
+                ppEnabledLayerNames = VkLayerNames,
+                enabledExtensionCount = sdlExtensionCount,
+                ppEnabledExtensionNames = sdlExtensions,
+                pApplicationInfo = &appInfo
             };
 
-            SilkVk.Instance instance;
-            if (vk.CreateInstance(&instanceCreateInfo, null, &instance) != SilkVk.Result.Success)
+            if (vkCreateInstance(&instanceCreateInfo, null, out VkInstance instance) != VkResult.Success)
                 throw new Exception("failed to create instance");
 
-            VkInstance = instance;
+
+            VkInstanceApi = new VkInstanceApi(instance);
 
             uint deviceCount = 0;
-            vk.EnumeratePhysicalDevices(VkInstance, &deviceCount, null);
+
+            VkInstanceApi.vkEnumeratePhysicalDevices(&deviceCount, null);
+
             if (deviceCount == 0) throw new Exception("no GPUs with SilkVk support");
 
 
-            var devices = new SilkVk.PhysicalDevice[deviceCount];
-            fixed (SilkVk.PhysicalDevice* devicesPtr = devices)
+            var devices = new VkPhysicalDevice[deviceCount];
+            fixed (VkPhysicalDevice* devicesPtr = devices)
             {
-                vk.EnumeratePhysicalDevices(VkInstance, &deviceCount, devicesPtr);
+                VkInstanceApi.vkEnumeratePhysicalDevices(&deviceCount, devicesPtr);
             }
 
             //just take the zeroth device for now!
             VkPhysicalDevice = devices[0];
 
-            vk.GetPhysicalDeviceProperties(VkPhysicalDevice, out var properties);
+            VkInstanceApi.vkGetPhysicalDeviceProperties(VkPhysicalDevice, out var properties);
 
-            Console.WriteLine("Picked GPU: " + Marshal.PtrToStringAnsi((nint)properties.DeviceName));
+            Console.WriteLine("Picked GPU: " + Marshal.PtrToStringAnsi((nint)properties.deviceName));
 
-            var features13 = new SilkVk.PhysicalDeviceVulkan13Features
+            var features13 = new VkPhysicalDeviceVulkan13Features
             {
-                SType = SilkVk.StructureType.PhysicalDeviceVulkan13Features,
-                DynamicRendering = true,
-                Synchronization2 = true
+                dynamicRendering = true,
+                synchronization2 = true
             };
 
-            Silk.NET.Vulkan.Extensions.KHR.KhrSurface khrSurface;
-            if (!vk.TryGetInstanceExtension(VkInstance, out khrSurface))
-                throw new Exception("VK_KHR_surface extension not found");
+            VkSurfaceKHR_T* pSurface;
 
-            VkSurfaceKHR = window.VkSurface
-            .Create<SilkVk.AllocationCallbacks>(instance.ToHandle(), null)
-            .ToSurface();
+            //None of this makes sense. It uses pSurface to inform us of the surface...Except the pointer itself becomes the handle.
+            //This is utter nonsense, as in C/Cpp, SDL asks for a pointer to a surface, not a pointer to a pointer.
+            SDL_Vulkan_CreateSurface(window, (VkInstance_T*)(instance.Handle), null, &pSurface);
 
-            var queueFamilyIndices = FindQueueFamilies(VkPhysicalDevice, khrSurface, VkSurfaceKHR);
+            VkSurfaceKHR = new VkSurfaceKHR((ulong)pSurface);
+
+            var queueFamilyIndices = FindQueueFamilies(VkPhysicalDevice, VkSurfaceKHR);
 
             var graphicsQueuePriority = 1.0f;
-            var graphicsQueueCreateInfo = new SilkVk.DeviceQueueCreateInfo
+            var graphicsQueueCreateInfo = new VkDeviceQueueCreateInfo
             {
-                SType = SilkVk.StructureType.DeviceQueueCreateInfo,
-                QueueFamilyIndex = queueFamilyIndices.GraphicsFamily!.Value,
-                QueueCount = 1,
-                PQueuePriorities = &graphicsQueuePriority
+                sType = VkStructureType.DeviceQueueCreateInfo,
+                queueFamilyIndex = queueFamilyIndices.GraphicsFamily!.Value,
+                queueCount = 1,
+                pQueuePriorities = &graphicsQueuePriority
             };
 
             var transferQueuePriority = 0.1f;
 
-            var transferQueueCreateInfo = new SilkVk.DeviceQueueCreateInfo
+            var transferQueueCreateInfo = new VkDeviceQueueCreateInfo
             {
-                SType = SilkVk.StructureType.DeviceQueueCreateInfo,
-                QueueFamilyIndex = queueFamilyIndices.TransferFamily!.Value,
-                QueueCount = 1,
-                PQueuePriorities = &transferQueuePriority
+                sType = VkStructureType.DeviceQueueCreateInfo,
+                queueFamilyIndex = queueFamilyIndices.TransferFamily!.Value,
+                queueCount = 1,
+                pQueuePriorities = &transferQueuePriority
             };
 
-            var deviceFeatures = new PhysicalDeviceFeatures();
+            var queueCreateInfos = stackalloc VkDeviceQueueCreateInfo[2] { graphicsQueueCreateInfo, transferQueueCreateInfo };
 
-
-            var queueCreateInfos = stackalloc SilkVk.DeviceQueueCreateInfo[2] { graphicsQueueCreateInfo, transferQueueCreateInfo };
-
-            var deviceCreateInfo = new DeviceCreateInfo
+            var deviceCreateInfo = new VkDeviceCreateInfo
             {
-                SType = StructureType.DeviceCreateInfo,
-                QueueCreateInfoCount = 2,
-                PQueueCreateInfos = queueCreateInfos,
-                PEnabledFeatures = &deviceFeatures,
-                EnabledExtensionCount = 0,
-                PpEnabledExtensionNames = null
-            };
-            SilkVk.Device createdDevice;
-            var result = vk.CreateDevice(VkPhysicalDevice, &deviceCreateInfo, null, &createdDevice);
+                sType = VkStructureType.DeviceCreateInfo,
+                queueCreateInfoCount = 2,
+                pQueueCreateInfos = queueCreateInfos,
 
-            if (result != SilkVk.Result.Success)
+                //Sketch as hell
+                pEnabledFeatures = null,
+                enabledExtensionCount = 0,
+                ppEnabledExtensionNames = null,
+                pNext = &features13
+            };
+            VkDevice createdDevice;
+            var result = VkInstanceApi.vkCreateDevice(VkPhysicalDevice, &deviceCreateInfo, null, &createdDevice);
+
+            if (result != VkResult.Success)
                 throw new Exception($"failed to create logical device: {result}");
 
-            VkDevice = createdDevice;
+            VkDeviceApi = new VkDeviceApi(VkInstanceApi, createdDevice);
 
-            vk.GetDeviceQueue(VkDevice, queueFamilyIndices.GraphicsFamily!.Value, 0, out GraphicsQueue);
+            VkDeviceApi.vkGetDeviceQueue(queueFamilyIndices.GraphicsFamily!.Value, 0, out GraphicsQueue);
 
-            vk.GetDeviceQueue(VkDevice, queueFamilyIndices.TransferFamily!.Value, 0, out TransferQueue);
+            VkDeviceApi.vkGetDeviceQueue(queueFamilyIndices.TransferFamily!.Value, 0, out TransferQueue);
 
         }
 
         unsafe QueueFamilyIndices FindQueueFamilies(
-    SilkVk.PhysicalDevice physicalDevice,
-    SilkVk.Extensions.KHR.KhrSurface khrSurface,
-    SilkVk.SurfaceKHR surface)
+    VkPhysicalDevice physicalDevice,
+    VkSurfaceKHR surface)
         {
             var indices = new QueueFamilyIndices();
 
             uint count = 0;
-            vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, null);
+            VkInstanceApi.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, null);
 
-            var families = new SilkVk.QueueFamilyProperties[count];
-            fixed (SilkVk.QueueFamilyProperties* famPtr = families)
+            var families = new VkQueueFamilyProperties[count];
+            fixed (VkQueueFamilyProperties* famPtr = families)
             {
-                vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, famPtr);
+                VkInstanceApi.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, famPtr);
             }
 
             for (uint i = 0; i < count; i++)
             {
-                var flags = families[i].QueueFlags;
-                khrSurface.GetPhysicalDeviceSurfaceSupport(physicalDevice, i, surface, out var presentSupport);
-                if (flags.HasFlag(SilkVk.QueueFlags.GraphicsBit) && presentSupport)
+                var flags = families[i].queueFlags;
+                VkInstanceApi.vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, out var presentSupport);
+                if (flags.HasFlag(VkQueueFlags.Graphics) && presentSupport)
                 {
                     indices.GraphicsFamily = i;
                 }
 
                 // prefer a DEDICATED transfer family: has transfer bit, but NOT graphics
                 // (graphics/compute queues always implicitly support transfer anyway)
-                if (flags.HasFlag(SilkVk.QueueFlags.TransferBit) &&
-                    !flags.HasFlag(SilkVk.QueueFlags.GraphicsBit))
+                if (flags.HasFlag(VkQueueFlags.Transfer) &&
+                    !flags.HasFlag(VkQueueFlags.Graphics))
                 {
                     indices.TransferFamily = i;
                 }

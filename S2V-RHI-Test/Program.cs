@@ -1,20 +1,34 @@
 ﻿using S2V_RHI_Test.RHI.VK;
-using Silk.NET.Maths;
-using Silk.NET.Windowing;
-using System.Runtime.InteropServices;
-using SilkVk = Silk.NET.Vulkan;
 
+using System.Runtime.InteropServices;
+
+using SDL;
+using static SDL.SDL3;
 
 namespace HelloTriangle;
 
-public static class Program
+unsafe public static class Program
 {
     public static void Main()
     {
-        var options = WindowOptions.DefaultVulkan;
-        options.Size = new Vector2D<int>(800, 600);
-        using var window = Window.Create(options);
-        window.Initialize(); // must call before window.VkSurface is populated
+        if (!SDL_Init(SDL_InitFlags.SDL_INIT_VIDEO))
+        {
+            Console.WriteLine($"SDL_Init failed: {SDL_GetError()}");
+            return;
+        }
+
+        SDL_Window* window = SDL_CreateWindow(
+            "My Vulkan App",
+            1280, 720,
+            SDL_WindowFlags.SDL_WINDOW_VULKAN | SDL_WindowFlags.SDL_WINDOW_RESIZABLE
+        );
+
+        if (window == null)
+        {
+            Console.WriteLine($"SDL_CreateWindow failed: {SDL_GetError()}");
+            return;
+        }
+
 
 
         //From here on, we can use the device!
