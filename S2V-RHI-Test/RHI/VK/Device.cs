@@ -15,13 +15,13 @@ using System.Text;
 
 public static class S2vDevice
 {
-    public static S2V_RHI_Test.RHI.VK.Device? Device { get; private set; }
+    public static S2V_RHI_Test.RHI.VK.Device? RenderDevice { get; private set; }
 
     unsafe public static void createS2vDevice(SDL_Window* window)
     {
-        if (Device == null)
+        if (RenderDevice == null)
         {
-            Device = new S2V_RHI_Test.RHI.VK.Device(window);
+            RenderDevice = new S2V_RHI_Test.RHI.VK.Device(window);
         }
     }
 }
@@ -43,13 +43,16 @@ namespace S2V_RHI_Test.RHI.VK
 
     public class Device
     {
-        VkInstanceApi VkInstanceApi;
-        VkDeviceApi VkDeviceApi;
-        VkPhysicalDevice VkPhysicalDevice;
-        VkSurfaceKHR VkSurfaceKHR;
+        internal VkInstanceApi VkInstanceApi;
+        internal VkDeviceApi VkDeviceApi;
+        internal VkPhysicalDevice VkPhysicalDevice;
+        internal VkSurfaceKHR VkSurfaceKHR;
 
-        VkQueue GraphicsQueue;
-        VkQueue TransferQueue;
+        internal QueueFamilyIndices QueueFamilyIndices;
+        private VkQueue _graphicsQueue;
+        internal VkQueue GraphicsQueue => _graphicsQueue;
+        private VkQueue _transferQueue;
+        internal VkQueue TransferQueue => _transferQueue;
 
         unsafe public Device(SDL_Window* window)
         {
@@ -127,13 +130,13 @@ namespace S2V_RHI_Test.RHI.VK
 
             VkSurfaceKHR = new VkSurfaceKHR((ulong)pSurface);
 
-            var queueFamilyIndices = FindQueueFamilies(VkPhysicalDevice, VkSurfaceKHR);
+            QueueFamilyIndices = FindQueueFamilies(VkPhysicalDevice, VkSurfaceKHR);
 
             var graphicsQueuePriority = 1.0f;
             var graphicsQueueCreateInfo = new VkDeviceQueueCreateInfo
             {
                 sType = VkStructureType.DeviceQueueCreateInfo,
-                queueFamilyIndex = queueFamilyIndices.GraphicsFamily!.Value,
+                queueFamilyIndex = QueueFamilyIndices.GraphicsFamily!.Value,
                 queueCount = 1,
                 pQueuePriorities = &graphicsQueuePriority
             };
@@ -143,12 +146,17 @@ namespace S2V_RHI_Test.RHI.VK
             var transferQueueCreateInfo = new VkDeviceQueueCreateInfo
             {
                 sType = VkStructureType.DeviceQueueCreateInfo,
-                queueFamilyIndex = queueFamilyIndices.TransferFamily!.Value,
+                queueFamilyIndex = QueueFamilyIndices.TransferFamily!.Value,
                 queueCount = 1,
                 pQueuePriorities = &transferQueuePriority
             };
 
             var queueCreateInfos = stackalloc VkDeviceQueueCreateInfo[2] { graphicsQueueCreateInfo, transferQueueCreateInfo };
+
+
+            string[] extensions = new string[] { "VK_KHR_swapchain" };
+
+            VkStringArray extensionsArray = new VkStringArray(extensions);
 
             var deviceCreateInfo = new VkDeviceCreateInfo
             {
@@ -158,8 +166,8 @@ namespace S2V_RHI_Test.RHI.VK
 
                 //Sketch as hell
                 pEnabledFeatures = null,
-                enabledExtensionCount = 0,
-                ppEnabledExtensionNames = null,
+                enabledExtensionCount = extensionsArray.Length,
+                ppEnabledExtensionNames = extensionsArray,
                 pNext = &features13
             };
             VkDevice createdDevice;
@@ -170,9 +178,9 @@ namespace S2V_RHI_Test.RHI.VK
 
             VkDeviceApi = new VkDeviceApi(VkInstanceApi, createdDevice);
 
-            VkDeviceApi.vkGetDeviceQueue(queueFamilyIndices.GraphicsFamily!.Value, 0, out GraphicsQueue);
+            VkDeviceApi.vkGetDeviceQueue(QueueFamilyIndices.GraphicsFamily!.Value, 0, out _graphicsQueue);
 
-            VkDeviceApi.vkGetDeviceQueue(queueFamilyIndices.TransferFamily!.Value, 0, out TransferQueue);
+            VkDeviceApi.vkGetDeviceQueue(QueueFamilyIndices.TransferFamily!.Value, 0, out _transferQueue);
 
         }
 
@@ -211,7 +219,7 @@ namespace S2V_RHI_Test.RHI.VK
 
                 if (!indices.GraphicsFamily.HasValue)
                 {
-                    throw new Exception("This Device does not have a queue family supporting graphics AND present");
+                    throw new Exception("This RenderDevice does not have a queue family supporting graphics AND present");
                 }
 
                 if (indices.IsComplete)
@@ -226,6 +234,36 @@ namespace S2V_RHI_Test.RHI.VK
             }
 
             return indices;
+        }
+
+        unsafe public void SubmitGraphics(CommandList list, VkSemaphore imageAvailableSemaphore = new VkSemaphore(), VkSemaphore renderFinishedSemaphore = new VkSemaphore(), VkFence fifFreed = new VkFence())
+        {
+            VkCommandBufferSubmitInfo cmdBufferSubmitInfo = new VkCommandBufferSubmitInfo
+            {
+                commandBuffer = list.Handle
+            };
+
+            VkSemaphoreSubmitInfo imgAvailableSemaphoreInfo = new VkSemaphoreSubmitInfo
+            {
+                semaphore = imageAvailableSemaphore
+            };
+
+            VkSemaphoreSubmitInfo renderFinishedSemaphoreInfo = new VkSemaphoreSubmitInfo
+            {
+                semaphore = renderFinishedSemaphore
+            };
+
+            VkSubmitInfo2 submitInfo = new VkSubmitInfo2
+            {
+                waitSemaphoreInfoCount = (uint)Convert.ToInt32(!imageAvailableSemaphore.IsNull),
+                pWaitSemaphoreInfos = &imgAvailableSemaphoreInfo,
+                commandBufferInfoCount = 1,
+                pCommandBufferInfos = &cmdBufferSubmitInfo,
+                signalSemaphoreInfoCount = (uint)Convert.ToInt32(!renderFinishedSemaphore.IsNull),
+                pSignalSemaphoreInfos = &renderFinishedSemaphoreInfo
+            };
+
+            VkDeviceApi.vkQueueSubmit2(_graphicsQueue, submitInfo, fifFreed);
         }
     }
 }
