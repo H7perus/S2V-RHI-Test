@@ -14,11 +14,14 @@ namespace S2V_RHI_Test.RHI.VK
         private uint _currentImageIndex = new();
         private readonly List<VkImage> _images = new();
         private readonly List<VkImageView> _imageViews = new();
-
+        private readonly List<VkImageLayout> _imageLayouts = new();
+        private readonly List<VkSemaphore> _writeToImageFinishedSemaphores = new();
         public VkSwapchainKHR Handle => _swapchain;
 
         public IReadOnlyList<VkImage> Images => _images;
         public IReadOnlyList<VkImageView> ImageViews => _imageViews;
+        public IReadOnlyList<VkImageLayout> ImageLayouts => _imageLayouts;
+        public IReadOnlyList<VkSemaphore> WriteToImageFinishedSemaphores => _writeToImageFinishedSemaphores;
 
         public VkPresentModeKHR PresentMode { get; private set; }
         public VkSurfaceFormatKHR SurfaceFormat { get; private set; }
@@ -153,6 +156,16 @@ namespace S2V_RHI_Test.RHI.VK
 
             _images.Clear();
             _images.AddRange(images);
+
+            //This is fine because VkImageLayout defaults to undefined, which is correct here
+            _imageLayouts.AddRange(new VkImageLayout[imageCount]);
+
+            var semaphores = new VkSemaphore[imageCount];
+            foreach (ref var semaphore in semaphores.AsSpan())
+            {
+                semaphore = RenderDevice!.CreateSemaphore();
+            }
+            _writeToImageFinishedSemaphores.AddRange(semaphores);
         }
 
         private void CreateImageViews()
@@ -247,7 +260,7 @@ namespace S2V_RHI_Test.RHI.VK
             };
         }
 
-        public uint AcquireNextImage(VkSemaphore imageAvailableSemaphore)
+        public int AcquireNextImage(VkSemaphore imageAvailableSemaphore)
         {
             var device = RenderDevice
                 ?? throw new InvalidOperationException(
@@ -262,7 +275,7 @@ namespace S2V_RHI_Test.RHI.VK
                     out uint imageIndex),
                 "Failed to acquire swapchain image.");
             _currentImageIndex = imageIndex;
-            return imageIndex;
+            return (int)imageIndex;
         }
 
 
@@ -280,7 +293,7 @@ namespace S2V_RHI_Test.RHI.VK
                     pImageIndices = pImageIndex
                 };
 
-                RenderDevice.VkDeviceApi.vkQueuePresentKHR(RenderDevice.GraphicsQueue, &presentInfo);
+                RenderDevice!.VkDeviceApi.vkQueuePresentKHR(RenderDevice.GraphicsQueue, &presentInfo);
             }
         }
 

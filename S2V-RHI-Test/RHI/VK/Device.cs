@@ -236,6 +236,39 @@ namespace S2V_RHI_Test.RHI.VK
             return indices;
         }
 
+        public VkSemaphore CreateSemaphore()
+        {
+            VkDeviceApi.vkCreateSemaphore(out var semaphore);
+            return semaphore;
+        }
+        //public void CreateSemaphore(out VkSemaphore semaphore)
+        //{
+        //    VkDeviceApi.vkCreateSemaphore(out semaphore);
+        //}
+        public VkFence CreateFence(bool isSignaled = false)
+        {
+            VkFenceCreateInfo fenceCreateInfo = new() { flags = (VkFenceCreateFlags)Convert.ToInt32(isSignaled) };
+
+            VkDeviceApi.vkCreateFence(fenceCreateInfo, out var fence);
+            return fence;
+        }
+        public void WaitForFences(VkFence fence, bool waitForAll = true, ulong timeout = ulong.MaxValue)
+        {
+            VkDeviceApi.vkWaitForFences(fence, waitForAll, timeout);
+        }
+
+        public void WaitForFences(Span<VkFence> fence, bool waitForAll = true, ulong timeout = ulong.MaxValue)
+        {
+            VkDeviceApi.vkWaitForFences(fence, waitForAll, timeout);
+        }
+        public void ResetFences(VkFence fence)
+        {
+            VkDeviceApi.vkResetFences(fence);
+        }
+        public void ResetFences(Span<VkFence> fences)
+        {
+            VkDeviceApi.vkResetFences(fences);
+        }
         unsafe public void SubmitGraphics(CommandList list, VkSemaphore imageAvailableSemaphore = new VkSemaphore(), VkSemaphore renderFinishedSemaphore = new VkSemaphore(), VkFence fifFreed = new VkFence())
         {
             VkCommandBufferSubmitInfo cmdBufferSubmitInfo = new VkCommandBufferSubmitInfo

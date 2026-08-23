@@ -205,6 +205,34 @@ unsafe public class CommandList : IDisposable
         }
         //H7per: TODO: We should warn if nothing was submitted.
     }
+
+    public void BindGraphicsPipeline(Pipeline pipeline)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdBindPipeline(Handle, VkPipelineBindPoint.Graphics, pipeline.VkPipeline);
+    }
+    //Might need an overload to set multiple.
+    public void SetViewport(VkViewport viewport)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdSetViewport(Handle, 0, viewport);
+    }
+    public void SetScissor(VkRect2D scissor)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdSetScissor(Handle, 0, scissor);
+    }
+    public void EndRendering()
+    {
+        RenderDevice!.VkDeviceApi.vkCmdEndRendering(Handle);
+    }
+    public void Draw(uint vertexCount, uint instanceCount, uint firstVertex, uint firstInstance)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdDraw(Handle, vertexCount, instanceCount, firstVertex, firstInstance);
+    }
+
+    public void DrawIndexed(uint indexCount, uint instanceCount, uint firstIndex, int vertexOffset, uint firstInstance)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdDrawIndexed(Handle, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    }
+
     private static void Check(
         VkResult result,
         string operation)
