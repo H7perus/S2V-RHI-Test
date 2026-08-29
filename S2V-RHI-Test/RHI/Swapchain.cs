@@ -1,11 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Vortice.Vulkan;
-
-using static Vortice.Vulkan.Vulkan;
 using static S2vDevice;
+using static Vortice.Vulkan.Vulkan;
 
-namespace S2V_RHI_Test.RHI.VK
+namespace S2V_RHI_Test.RHI
 {
     internal unsafe class Swapchain : IDisposable
     {
@@ -20,7 +20,7 @@ namespace S2V_RHI_Test.RHI.VK
 
         public IReadOnlyList<VkImage> Images => _images;
         public IReadOnlyList<VkImageView> ImageViews => _imageViews;
-        public IReadOnlyList<VkImageLayout> ImageLayouts => _imageLayouts;
+        public Span<VkImageLayout> ImageLayouts => CollectionsMarshal.AsSpan(_imageLayouts);
         public IReadOnlyList<VkSemaphore> WriteToImageFinishedSemaphores => _writeToImageFinishedSemaphores;
 
         public VkPresentModeKHR PresentMode { get; private set; }

@@ -11,12 +11,9 @@
 
   <ItemGroup>
     <PackageReference Include="ppy.SDL3-CS" Version="2026.722.0" />
+    <PackageReference Include="SlangShaderSharp" Version="2026.16.0" />
     <PackageReference Include="Vortice.Vulkan" Version="3.2.3" />
     <PackageReference Include="Vortice.VulkanMemoryAllocator" Version="1.7.0" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="RHI\GL\" />
   </ItemGroup>
 
 </Project>

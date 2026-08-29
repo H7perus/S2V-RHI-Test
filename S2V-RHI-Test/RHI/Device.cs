@@ -1,33 +1,32 @@
 ﻿global using static S2vDevice;
-
-using Vortice.Vulkan;
-using static Vortice.Vulkan.Vulkan;
-
+using S2V_RHI_Test.RHI;
 using SDL;
-using static SDL.SDL3;
-
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
-
+using Vortice.Vulkan;
+using static SDL.SDL3;
+using static Vortice.Vulkan.Vma;
+using static Vortice.Vulkan.Vulkan;
 
 public static class S2vDevice
 {
-    public static S2V_RHI_Test.RHI.VK.Device? RenderDevice { get; private set; }
+    public static Device? RenderDevice { get; private set; }
 
     unsafe public static void createS2vDevice(SDL_Window* window)
     {
         if (RenderDevice == null)
         {
-            RenderDevice = new S2V_RHI_Test.RHI.VK.Device(window);
+            RenderDevice = new S2V_RHI_Test.RHI.Device(window);
         }
     }
 }
 
 
-namespace S2V_RHI_Test.RHI.VK
+namespace S2V_RHI_Test.RHI
 {
     public struct QueueFamilyIndices
     {
@@ -40,19 +39,93 @@ namespace S2V_RHI_Test.RHI.VK
     };
 
 
+    enum BindlessBindingIndex
+    {
+        CombinedImageSampler = 1,
+        UniformBuffer = 6,
+        StorageBuffer = 7,
+    }
+
 
     public class Device
     {
+
         internal VkInstanceApi VkInstanceApi;
         internal VkDeviceApi VkDeviceApi;
         internal VkPhysicalDevice VkPhysicalDevice;
         internal VkSurfaceKHR VkSurfaceKHR;
+
+
+        private class BindlessManagerType
+        {
+            private sealed class BindlessSlotAllocator
+            {
+                private readonly Stack<uint> FreeIndices = new();
+                private uint NextIndex = 0;
+
+                private uint Capacity;
+
+                public BindlessSlotAllocator(uint capacity)
+                {
+                    Capacity = capacity;
+                }
+                
+                public uint Allocate()
+                {
+                    if (FreeIndices.TryPop(out uint index))
+                    {
+                        return index;
+                    }
+
+                    if (NextIndex == Capacity)
+                    {
+                        throw new InvalidOperationException("Ran out of bindless slots for the descriptor type");
+                    }
+
+                    index = NextIndex++;
+                    return index;
+                }
+
+                public void Free(uint index)
+                {
+                    FreeIndices.Push(index);
+                }
+            }
+            private readonly BindlessSlotAllocator[] Allocators;
+
+            public BindlessManagerType()
+            {
+                Allocators = new BindlessSlotAllocator[Enum.GetValues<BindlessBindingIndex>().Length];
+                for (int i = 0; i < Allocators.Length; i++)
+                    Allocators[i] = new BindlessSlotAllocator(1000);
+            }
+
+            public uint GetFreeBindlessIndex(BindlessBindingIndex bindingIndex)
+            {
+                var allocatorIndex = Array.IndexOf(Enum.GetValues<BindlessBindingIndex>(), bindingIndex);
+
+                return Allocators[allocatorIndex].Allocate();
+            }
+
+            public void FreeBindlessIndex(BindlessBindingIndex bindingIndex, uint index)
+            {
+                var allocatorIndex = Array.IndexOf(Enum.GetValues<BindlessBindingIndex>(), bindingIndex);
+
+                Allocators[allocatorIndex].Free(index);
+            }
+        }
+        private readonly BindlessManagerType BindlessManager = new();
+        internal VkDescriptorSetLayout SharedBindlessDescriptorSetLayout;
+        internal VkDescriptorSet SharedBindlessDescriptorSet;
+        internal VkPipelineLayout SharedPipelineLayout;
+        internal VkDescriptorPool SharedDescriptorPool;
 
         internal QueueFamilyIndices QueueFamilyIndices;
         private VkQueue _graphicsQueue;
         internal VkQueue GraphicsQueue => _graphicsQueue;
         private VkQueue _transferQueue;
         internal VkQueue TransferQueue => _transferQueue;
+        internal VmaAllocator VmaAllocator;
 
         unsafe public Device(SDL_Window* window)
         {
@@ -116,8 +189,21 @@ namespace S2V_RHI_Test.RHI.VK
 
             Console.WriteLine("Picked GPU: " + Marshal.PtrToStringAnsi((nint)properties.deviceName));
 
+
+            var features12 = new VkPhysicalDeviceVulkan12Features
+            {
+                descriptorBindingSampledImageUpdateAfterBind = true,
+                descriptorBindingUniformBufferUpdateAfterBind = true,
+                descriptorBindingStorageBufferUpdateAfterBind = true,
+                descriptorBindingPartiallyBound = true,
+                descriptorBindingVariableDescriptorCount = true,
+                
+                runtimeDescriptorArray = true
+            };
+
             var features13 = new VkPhysicalDeviceVulkan13Features
             {
+                pNext = &features12,
                 dynamicRendering = true,
                 synchronization2 = true
             };
@@ -182,6 +268,23 @@ namespace S2V_RHI_Test.RHI.VK
 
             VkDeviceApi.vkGetDeviceQueue(QueueFamilyIndices.TransferFamily!.Value, 0, out _transferQueue);
 
+
+            VmaAllocatorCreateInfo allocatorCreateInfo = new()
+            {
+                instance = VkInstanceApi.Instance,
+                device = VkDeviceApi.Device,
+                physicalDevice = VkPhysicalDevice,
+                vulkanApiVersion = appInfo.apiVersion,
+            };
+
+            vmaCreateAllocator(&allocatorCreateInfo, out var allocator);
+            VmaAllocator = allocator;
+
+
+            CreateSharedBindlessDescriptorSetLayout();
+            CreateSharedPipelineLayout();
+            CreateSharedDescriptorPool();
+            CreateSharedBindlessDescriptorSet();
         }
 
         unsafe QueueFamilyIndices FindQueueFamilies(
@@ -241,10 +344,7 @@ namespace S2V_RHI_Test.RHI.VK
             VkDeviceApi.vkCreateSemaphore(out var semaphore);
             return semaphore;
         }
-        //public void CreateSemaphore(out VkSemaphore semaphore)
-        //{
-        //    VkDeviceApi.vkCreateSemaphore(out semaphore);
-        //}
+
         public VkFence CreateFence(bool isSignaled = false)
         {
             VkFenceCreateInfo fenceCreateInfo = new() { flags = (VkFenceCreateFlags)Convert.ToInt32(isSignaled) };
@@ -252,6 +352,7 @@ namespace S2V_RHI_Test.RHI.VK
             VkDeviceApi.vkCreateFence(fenceCreateInfo, out var fence);
             return fence;
         }
+
         public void WaitForFences(VkFence fence, bool waitForAll = true, ulong timeout = ulong.MaxValue)
         {
             VkDeviceApi.vkWaitForFences(fence, waitForAll, timeout);
@@ -261,14 +362,17 @@ namespace S2V_RHI_Test.RHI.VK
         {
             VkDeviceApi.vkWaitForFences(fence, waitForAll, timeout);
         }
+
         public void ResetFences(VkFence fence)
         {
             VkDeviceApi.vkResetFences(fence);
         }
+
         public void ResetFences(Span<VkFence> fences)
         {
             VkDeviceApi.vkResetFences(fences);
         }
+
         unsafe public void SubmitGraphics(CommandList list, VkSemaphore imageAvailableSemaphore = new VkSemaphore(), VkSemaphore renderFinishedSemaphore = new VkSemaphore(), VkFence fifFreed = new VkFence())
         {
             VkCommandBufferSubmitInfo cmdBufferSubmitInfo = new VkCommandBufferSubmitInfo
@@ -298,5 +402,160 @@ namespace S2V_RHI_Test.RHI.VK
 
             VkDeviceApi.vkQueueSubmit2(_graphicsQueue, submitInfo, fifFreed);
         }
+
+        internal unsafe uint GetBindlessSlot(VkDescriptorType descriptorType, VkBuffer bufferHandle)
+        {
+            var bindlessIndex = BindlessManager.GetFreeBindlessIndex((BindlessBindingIndex)descriptorType);
+
+            VkDescriptorBufferInfo bufferInfo = new()
+            {
+                buffer = bufferHandle,
+                offset = 0,
+                range = Vulkan.VK_WHOLE_SIZE
+            };
+
+            VkWriteDescriptorSet write = new()
+            {
+                dstSet = RenderDevice!.SharedBindlessDescriptorSet,
+                dstBinding = 6,
+                dstArrayElement = bindlessIndex,
+                descriptorCount = 1,
+                descriptorType = VkDescriptorType.UniformBuffer,
+                pBufferInfo = &bufferInfo
+            };
+
+            RenderDevice!.VkDeviceApi.vkUpdateDescriptorSets(1, &write, 0, null);
+
+            return bindlessIndex;
+        }
+
+        internal void FreeBindlessindex(VkDescriptorType descriptorType, uint index)
+        {
+            BindlessManager.FreeBindlessIndex((BindlessBindingIndex)descriptorType, index);
+        }
+
+        private unsafe void CreateSharedBindlessDescriptorSetLayout()
+        {
+
+            var bindings = Enum.GetValues<BindlessBindingIndex>();
+
+            var descriptorSetLayoutBindings = new VkDescriptorSetLayoutBinding[bindings.Length];
+
+            for (var i = 0; i < bindings.Length; i++)
+            {
+                descriptorSetLayoutBindings[i].binding = (uint)bindings[i];
+                //Looks like nonsense, but the bindings match VkDescriptorType's values. I believe this is by design on slangs side.
+                descriptorSetLayoutBindings[i].descriptorType = (VkDescriptorType)bindings[i];
+                descriptorSetLayoutBindings[i].stageFlags = VkShaderStageFlags.All;
+                //H7per: TODO: We probably want to make this more fine grained. We won't need as many buffers as we do textures, for instance.
+                descriptorSetLayoutBindings[i].descriptorCount = 1000;
+            }
+
+            //These flags are static for us. Just annoying we have to have them N times.
+            VkDescriptorBindingFlags[] bindingFlags = Enumerable.Repeat(VkDescriptorBindingFlags.PartiallyBound | VkDescriptorBindingFlags.UpdateAfterBind, bindings.Length).ToArray();
+
+
+            fixed (VkDescriptorBindingFlags* pBindingFlags = bindingFlags)
+            fixed (VkDescriptorSetLayoutBinding* pDescriptorSetLayoutBindings = descriptorSetLayoutBindings)
+            {
+                VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo = new()
+                {
+                    bindingCount = (uint)bindings.Length,
+                    pBindingFlags = pBindingFlags
+                }; 
+
+                VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = new()
+                {
+                    flags = VkDescriptorSetLayoutCreateFlags.UpdateAfterBindPool,
+                    pNext = &bindingFlagsInfo,
+                    bindingCount = (uint)bindings.Length,
+                    pBindings = pDescriptorSetLayoutBindings,
+                };
+
+
+                VkDeviceApi.vkCreateDescriptorSetLayout(setLayoutCreateInfo, out SharedBindlessDescriptorSetLayout);
+            }
+        }
+
+        private unsafe void CreateSharedFixedDescriptorSetLayout()
+        { }
+
+        private unsafe void CreateSharedPipelineLayout()
+        {
+
+            //PLACEHOLDER
+            VkDeviceApi.vkCreateDescriptorSetLayout(new VkDescriptorSetLayoutCreateInfo(), out var setLayout0);
+
+            var sets = new VkDescriptorSetLayout[2]
+                    {
+                        setLayout0,
+                        SharedBindlessDescriptorSetLayout,
+                    };
+
+            //Fixed push constant range for us. We push a DescriptorHandle and nothing more.
+            VkPushConstantRange pushRange = new()
+            {
+                stageFlags = VkShaderStageFlags.All,
+                size = 8
+            };
+
+            fixed (VkDescriptorSetLayout* pSets = sets)
+            {
+                VkPipelineLayoutCreateInfo layoutCreateInfo = new()
+                {
+                    setLayoutCount = 2,
+                    pSetLayouts = pSets,
+                    pushConstantRangeCount = 1,
+                    pPushConstantRanges = &pushRange
+                };
+                VkDeviceApi.vkCreatePipelineLayout(layoutCreateInfo, out SharedPipelineLayout);
+            }
+        }
+
+        private unsafe void CreateSharedDescriptorPool()
+        {
+            var bindings = Enum.GetValues<BindlessBindingIndex>();
+
+            VkDescriptorPoolSize[] poolSizes = new VkDescriptorPoolSize[bindings.Length];
+
+            for (var i = 0; i < bindings.Length; i++)
+            {
+                poolSizes[i].type = (VkDescriptorType)bindings[i];
+                poolSizes[i].descriptorCount = 10000;
+            }
+
+            fixed (VkDescriptorPoolSize* pPoolSizes = poolSizes)
+            fixed (VkDescriptorPool* pPool = &SharedDescriptorPool)
+            {
+                VkDescriptorPoolCreateInfo poolInfo = new()
+                {
+                    flags = VkDescriptorPoolCreateFlags.UpdateAfterBind,
+                    //Change this if it turns out we want more (like for having the fixed set per render context and FiF)
+                    maxSets = 2,
+                    poolSizeCount = (uint)bindings.Length,
+                    pPoolSizes = pPoolSizes
+                };
+
+                VkDeviceApi.vkCreateDescriptorPool(&poolInfo, null, pPool).CheckResult();
+            }
+        }
+
+        private unsafe void CreateSharedBindlessDescriptorSet()
+        {
+
+            fixed (VkDescriptorSetLayout* pSet = &SharedBindlessDescriptorSetLayout)
+            {
+                VkDescriptorSetAllocateInfo allocInfo = new()
+                {
+                    descriptorPool = SharedDescriptorPool,
+                    descriptorSetCount = 1,
+                    pSetLayouts = pSet
+                };
+
+                VkDeviceApi.vkAllocateDescriptorSets(allocInfo, out SharedBindlessDescriptorSet).CheckResult();
+            }
+        }
+
     }
+    
 }

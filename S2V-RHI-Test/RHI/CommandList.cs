@@ -2,7 +2,7 @@
 using System;
 using Vortice.Vulkan;
 
-namespace S2V_RHI_Test.RHI.VK;
+namespace S2V_RHI_Test.RHI;
 
 unsafe public class CommandList : IDisposable
 {
@@ -69,17 +69,42 @@ unsafe public class CommandList : IDisposable
                 Handle,
                 &beginInfo),
             "vkBeginCommandBuffer");
+
+        fixed (VkDescriptorSet* pSharedBindlessSet = &RenderDevice.SharedBindlessDescriptorSet)
+        {
+            RenderDevice!.VkDeviceApi.vkCmdBindDescriptorSets(
+                Handle,
+                pipelineBindPoint: VkPipelineBindPoint.Graphics,
+                layout: RenderDevice.SharedPipelineLayout,
+                firstSet: 1,
+                descriptorSetCount: 1,
+                pSharedBindlessSet,
+                dynamicOffsetCount: 0,
+                dynamicOffsets: null);
+            RenderDevice!.VkDeviceApi.vkCmdBindDescriptorSets(
+                Handle,
+                pipelineBindPoint: VkPipelineBindPoint.Compute,
+                layout: RenderDevice.SharedPipelineLayout,
+                firstSet: 1,
+                descriptorSetCount: 1,
+                pSharedBindlessSet,
+                dynamicOffsetCount: 0,
+                dynamicOffsets: null);
+        }
     }
 
     public void ClearSwapchainImage(
         VkImage image,
+        ref VkImageLayout currentLayout,
         VkClearColorValue color)
     {
         var device = RenderDevice!;
 
-        TransitionImage(
+        var preLayout = currentLayout;
+
+        ColorImageTransition(
             image,
-            VkImageLayout.ColorAttachmentOptimal,
+            ref currentLayout,
             VkImageLayout.TransferDstOptimal);
 
 
@@ -101,10 +126,10 @@ unsafe public class CommandList : IDisposable
             &subresourceRange
             );
 
-        TransitionImage(
+        ColorImageTransition(
             image,
-            VkImageLayout.TransferDstOptimal,
-            VkImageLayout.ColorAttachmentOptimal);
+            ref currentLayout,
+            preLayout);
     }
 
     public void End()
@@ -116,51 +141,20 @@ unsafe public class CommandList : IDisposable
             "vkEndCommandBuffer");
     }
 
-    public void TransitionImage(
+    public void ColorImageTransition(
         VkImage image,
-        VkImageLayout oldLayout,
-        VkImageLayout newLayout)
+        ref VkImageLayout imageLayout,
+        VkImageLayout targetLayout)
     {
         var device = RenderDevice!;
 
-        VkPipelineStageFlags srcStage;
-        VkPipelineStageFlags dstStage;
-        VkAccessFlags srcAccess;
-        VkAccessFlags dstAccess;
 
-        if (oldLayout == VkImageLayout.ColorAttachmentOptimal &&
-            newLayout == VkImageLayout.TransferDstOptimal)
+        var barrier = new VkImageMemoryBarrier2
         {
-            srcStage = VkPipelineStageFlags.BottomOfPipe;
-            dstStage = VkPipelineStageFlags.Transfer;
-
-            srcAccess = 0;
-            dstAccess = VkAccessFlags.TransferWrite;
-        }
-        else if (oldLayout == VkImageLayout.TransferDstOptimal &&
-                 newLayout == VkImageLayout.ColorAttachmentOptimal)
-        {
-            srcStage = VkPipelineStageFlags.Transfer;
-            dstStage = VkPipelineStageFlags.BottomOfPipe;
-
-            srcAccess = VkAccessFlags.TransferWrite;
-            dstAccess = 0;
-        }
-        else
-        {
-            throw new ArgumentException(
-                $"Unsupported image transition: " +
-                $"{oldLayout} -> {newLayout}");
-        }
-
-        var barrier = new VkImageMemoryBarrier
-        {
-            oldLayout = oldLayout,
-            newLayout = newLayout,
-            srcAccessMask = srcAccess,
-            dstAccessMask = dstAccess,
-            srcQueueFamilyIndex = uint.MaxValue,
-            dstQueueFamilyIndex = uint.MaxValue,
+            oldLayout = imageLayout,
+            newLayout = targetLayout,
+            srcAccessMask = VkAccessFlags2.MemoryWrite,
+            dstAccessMask = VkAccessFlags2.MemoryRead | VkAccessFlags2.MemoryWrite,
             image = image,
             subresourceRange = new VkImageSubresourceRange
             {
@@ -172,17 +166,8 @@ unsafe public class CommandList : IDisposable
             }
         };
 
-        device.VkDeviceApi.vkCmdPipelineBarrier(
-            Handle,
-            srcStage,
-            dstStage,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1,
-            &barrier);
+        PipelineBarrier(new[] { barrier });
+        imageLayout = targetLayout;
     }
 
     public void PipelineBarrier(ReadOnlySpan<VkImageMemoryBarrier2> imageMemoryBarriers = new ReadOnlySpan<VkImageMemoryBarrier2>(), ReadOnlySpan<VkBufferMemoryBarrier2> bufferMemoryBarriers = new ReadOnlySpan<VkBufferMemoryBarrier2>(), ReadOnlySpan<VkMemoryBarrier2> memoryBarriers = new ReadOnlySpan<VkMemoryBarrier2>())
@@ -206,23 +191,51 @@ unsafe public class CommandList : IDisposable
         //H7per: TODO: We should warn if nothing was submitted.
     }
 
-    public void BindGraphicsPipeline(Pipeline pipeline)
+    public void BindGraphicsPipeline(PipelineGraphics pipeline)
     {
-        RenderDevice!.VkDeviceApi.vkCmdBindPipeline(Handle, VkPipelineBindPoint.Graphics, pipeline.VkPipeline);
+        RenderDevice!.VkDeviceApi.vkCmdBindPipeline(Handle, VkPipelineBindPoint.Graphics, pipeline.HandlePipeline);
     }
+
+    public void BindVertexBuffer(Buffer vertexBuffer, uint binding = 0)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdBindVertexBuffer(Handle, binding, vertexBuffer.Handle);
+    }
+
+    public void BindIndexBuffer(Buffer indexBuffer)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdBindIndexBuffer(Handle, indexBuffer.Handle, 0, VkIndexType.Uint32);
+    }
+
     //Might need an overload to set multiple.
     public void SetViewport(VkViewport viewport)
     {
         RenderDevice!.VkDeviceApi.vkCmdSetViewport(Handle, 0, viewport);
     }
+
     public void SetScissor(VkRect2D scissor)
     {
         RenderDevice!.VkDeviceApi.vkCmdSetScissor(Handle, 0, scissor);
     }
+
+    public void PushConstants<T>(T data, uint offset = 0) where T : struct
+    {
+        if (offset + sizeof(T) > 8)
+        {
+            throw new ArgumentException($"The size of {nameof(T)} exceeds the available push constant range");
+        }
+        RenderDevice!.VkDeviceApi.vkCmdPushConstants(Handle, RenderDevice!.SharedPipelineLayout, VkShaderStageFlags.All, offset, (uint)sizeof(T), &data);
+    }
+
+    public void BeginRendering(VkRenderingInfo renderingInfo)
+    {
+        RenderDevice!.VkDeviceApi.vkCmdBeginRendering(Handle, &renderingInfo);
+    }
+
     public void EndRendering()
     {
         RenderDevice!.VkDeviceApi.vkCmdEndRendering(Handle);
     }
+
     public void Draw(uint vertexCount, uint instanceCount, uint firstVertex, uint firstInstance)
     {
         RenderDevice!.VkDeviceApi.vkCmdDraw(Handle, vertexCount, instanceCount, firstVertex, firstInstance);
