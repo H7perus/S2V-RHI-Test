@@ -2,20 +2,23 @@
 using System.Collections.Generic;
 using System.Text;
 using Vortice.Vulkan;
+using static Vortice.Vulkan.Vulkan;
+
+using S2V_RHI_Test.RHI.ShaderCompile;
 
 namespace S2V_RHI_Test.RHI
 {
     public class PipelineGraphics : Pipeline
     {
-        unsafe public PipelineGraphics(byte[] spirv)
+        unsafe public PipelineGraphics(SpecialisedShader shader, VkFormat colorTargetFormat = 0, VkFormat depthTargetFormat = 0)
         {
 
             VkShaderModule shaderModule;
-            fixed (byte* pSpirv = spirv)
+            fixed (byte* pSpirv = shader.Spirv.Span)
             {
                 VkShaderModuleCreateInfo shaderModuleInfo = new VkShaderModuleCreateInfo
                 {
-                    codeSize = (nuint)spirv.Length,
+                    codeSize = (nuint)shader.Spirv.Length,
                     pCode = (uint*)pSpirv
                 };
 
@@ -27,67 +30,97 @@ namespace S2V_RHI_Test.RHI
 
             VkPipelineShaderStageCreateInfo[] shaderModules = new VkPipelineShaderStageCreateInfo[2];
 
-            fixed (byte* pVertName = vertName)
-            fixed (byte* pFragName = fragName)
+
+            //low safety. We could really check and decide on what we prefer. Potentially even based on global state, like mesh shading support.
+            var bitmask = VkShaderStageFlags.Vertex | VkShaderStageFlags.MeshEXT | VkShaderStageFlags.Fragment;
+
+            var matched = shader.Stages
+                .Where(s => (s.Key & bitmask) != 0)
+                .ToArray();
+
+            using var names = new VkStringArray(matched.Select(s => s.Value).ToArray());
+
+            var index = 0;
+            foreach (var stage in matched)
+            {
+                shaderModules[index].sType = VkStructureType.PipelineShaderStageCreateInfo;
+                shaderModules[index].stage = stage.Key;
+                shaderModules[index].module = shaderModule;
+                shaderModules[index].pName = *((byte**)names + index);
+
+                index++;
+            }
+
+
+            VkPipelineRenderingCreateInfo renderingCreateInfo = new VkPipelineRenderingCreateInfo
+            {
+                colorAttachmentCount = Math.Min((uint)colorTargetFormat, 1),
+                pColorAttachmentFormats = &colorTargetFormat,
+                depthAttachmentFormat = depthTargetFormat
+            };
+
+            
+
+
+            
+
+            var vertexInputAttributes = new VkVertexInputAttributeDescription[shader.VertexInputs.Count];
+
+            uint attributeStride = 0;
+
+            for (int i = 0; i < shader.VertexInputs.Count; i++)
+            {
+                vertexInputAttributes[i].location = shader.VertexInputs[i].Location;
+
+                vertexInputAttributes[i].format = shader.VertexInputs[i].Format;
+
+                if (shader.VertexInputs[i].SemanticName == "POSITION" && shader.VertexInputs[i].SemanticIndex == 0)
+                {
+                    vertexInputAttributes[i].binding = 0;
+                    vertexInputAttributes[i].offset = 0;
+                }
+                else
+                {
+                    vertexInputAttributes[i].binding = 1;
+                    vertexInputAttributes[i].offset = attributeStride;
+                    attributeStride += shader.VertexInputs[i].Size;
+                }
+
+                
+            }
+            //pos buffer
+            VkVertexInputBindingDescription vertexPositionBinding = new()
+            {
+                binding = 0,
+                stride = 12,
+                inputRate = VkVertexInputRate.Vertex,
+            };
+            //attrib buffer
+            VkVertexInputBindingDescription vertexAttributeBinding = new()
+            {
+                binding = 1,
+                stride = attributeStride,
+                inputRate = VkVertexInputRate.Vertex,
+            };
+
+            VkVertexInputBindingDescription[] vertexBindingDescriptions = [vertexPositionBinding, vertexAttributeBinding];
+
+            fixed (VkVertexInputAttributeDescription* pVertexAttributes = vertexInputAttributes)
+            fixed (VkVertexInputBindingDescription* pVertexBindings = vertexBindingDescriptions)
             fixed (VkPipelineShaderStageCreateInfo* pShaderStageCreateInfos = shaderModules)
             {
-                VkFormat renderTargetFormat = VkFormat.B8G8R8A8Unorm;
-
-                VkPipelineRenderingCreateInfo renderingCreateInfo = new VkPipelineRenderingCreateInfo
+                VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = new() 
                 {
-                    colorAttachmentCount = 1,
-                    pColorAttachmentFormats = &renderTargetFormat
+                    vertexAttributeDescriptionCount = (uint)vertexInputAttributes.Length,
+                    pVertexAttributeDescriptions = pVertexAttributes,
+                    vertexBindingDescriptionCount = (uint)vertexBindingDescriptions.Length,
+                    pVertexBindingDescriptions = pVertexBindings,
                 };
-
-                shaderModules[0] = new VkPipelineShaderStageCreateInfo
-                {
-                    sType = VkStructureType.PipelineShaderStageCreateInfo,
-                    stage = VkShaderStageFlags.Vertex,
-                    module = shaderModule,
-                    pName = pVertName
-                };
-
-                shaderModules[1] = new VkPipelineShaderStageCreateInfo
-                {
-                    sType = VkStructureType.PipelineShaderStageCreateInfo,
-                    stage = VkShaderStageFlags.Fragment,
-                    module = shaderModule,
-                    pName = pFragName
-                };
-
-                VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = new() { };
-
-
-                //This is for the vertex buffer
-                VkVertexInputBindingDescription vertexInputBindingDescription = new()
-                {
-                    binding = 0,
-                    stride = 12,
-                    inputRate = VkVertexInputRate.Vertex,
-                };
-
-                VkVertexInputAttributeDescription vertexInputAttributeDescription = new()
-                {
-                    //location in the shader
-                    location = 0,
-                    //bound to what buffer (binding 0)
-                    binding = 0,
-                    //with what format
-                    format = VkFormat.R32G32B32Sfloat,
-                    // at what offset in the bound buffers element (i.e. N * stride + offset for each vertex's value)
-                    offset = 0
-                };
-
-                vertexInputStateCreateInfo.vertexAttributeDescriptionCount = 1;
-                vertexInputStateCreateInfo.pVertexAttributeDescriptions = &vertexInputAttributeDescription;
-
-                vertexInputStateCreateInfo.vertexBindingDescriptionCount = 1;
-                vertexInputStateCreateInfo.pVertexBindingDescriptions = &vertexInputBindingDescription;
 
                 // --- Input assembly: how vertices are grouped into primitives ---
                 VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo = new()
                 {
-                    topology = VkPrimitiveTopology.TriangleList,
+                    topology = VkPrimitiveTopology.TriangleStrip,
                     primitiveRestartEnable = false
                 };
 
@@ -100,10 +133,10 @@ namespace S2V_RHI_Test.RHI
                     pScissors = null
                 };
 
-                VkDynamicState* dynamicStates = stackalloc VkDynamicState[2]
+                VkDynamicState* dynamicStates = stackalloc VkDynamicState[]
                 {
                     VkDynamicState.Viewport,
-                    VkDynamicState.Scissor
+                    VkDynamicState.Scissor,
                 };
 
                 VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo = new()
@@ -161,11 +194,9 @@ namespace S2V_RHI_Test.RHI
 
                 var result = RenderDevice!.VkDeviceApi.vkCreateGraphicsPipeline(pipelineInfo, out var pipeline);
 
-                // Store handles for later use / cleanup — adjust field names to match your class
                 HandlePipeline = pipeline;
             }
 
-            // Shader modules aren't needed after pipeline creation
             RenderDevice!.VkDeviceApi.vkDestroyShaderModule(shaderModule);
         }
     }

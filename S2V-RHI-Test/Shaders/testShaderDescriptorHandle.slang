@@ -1,5 +1,4 @@
-// triangle.slang
-// Orange triangle generated purely from the vertex index — no vertex/index buffers needed.
+module testShader;
 
 import Core;
 
@@ -26,8 +25,15 @@ struct PushData
 [vk::push_constant]
 PushData pc;
 
+struct VertexInput
+{
+    float3 vPos : POSITION;
+    float3 vColor : COLOR;
+    float2 vTexCoord : TEXCOORD;
+}
+
 [shader("vertex")]
-VSOutput vertMain(float3 vPos, uint vertexIndex: SV_VulkanVertexID)
+VSOutput vertMain(VertexInput vIn, uint vertexIndex: SV_VulkanVertexID)
 {
     const var P = *pc.buffer;
 
@@ -35,13 +41,13 @@ VSOutput vertMain(float3 vPos, uint vertexIndex: SV_VulkanVertexID)
 
     sizeof(Parameters);
 
-    var transformed = mul(P.viewPerspective, float4(vPos.xyz, 1.0));
+    var transformed = mul(P.viewPerspective, float4(vIn.vPos.xyz, 1.0));
 
     output.position = transformed;
 
-    output.color = P.colors[vertexIndex].xyz;
-    if(isPurple == 1)
-        output.color = P.colors[vertexIndex].yzx;
+    output.color = vIn.vColor.xyz;
+    if (isPurple == 1)
+        output.color = vIn.vColor.yzx;
     return output;
 }
 

@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Numerics;
 
 using System.Runtime.InteropServices;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Vortice.Vulkan;
 using static SDL.SDL3;
 using Buffer = S2V_RHI_Test.RHI.Buffer;
@@ -48,7 +50,14 @@ unsafe public static class Program
 
         var shaderString = File.ReadAllText(rootPath + "Shaders/testShaderDescriptorHandle.slang");
 
-        var spirv = slangCompiler.Compile(shaderString);
+        //var spirv = slangCompiler.Compile(shaderString);
+
+        var module = slangCompiler.LoadShaderModule(rootPath + "Shaders/testShaderDescriptorHandle.slang");
+
+        SpecialisedShader specShader = slangCompiler.SpecialiseAndCompile(module, new Dictionary<string, int>() { {"isPurple", 1 } });
+
+        var options = new JsonSerializerOptions { WriteIndented = true, IncludeFields = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        Console.WriteLine(JsonSerializer.Serialize(specShader, options));
 
         var swapchain = new Swapchain(800, 600);
 
@@ -56,18 +65,20 @@ unsafe public static class Program
 
         var cmd = new CommandList();
 
-        var pipeline = new PipelineGraphics(spirv);
+        var pipeline = new PipelineGraphics(specShader, VkFormat.B8G8R8A8Unorm);
 
 
+        var uBuffer = new Buffer(1000, VkBufferUsageFlags.UniformBuffer, VmaMemoryUsage.GpuToCpu);
 
-        var buffer = new Buffer(1000, VkBufferUsageFlags.UniformBuffer, VmaMemoryUsage.GpuToCpu);
+        var vAttribBuffer = new Buffer(1000, VkBufferUsageFlags.VertexBuffer, VmaMemoryUsage.GpuToCpu);
 
-        var vBuffer = new Buffer(1000, VkBufferUsageFlags.VertexBuffer, VmaMemoryUsage.GpuToCpu);
+        var vPosBuffer = new Buffer(1000, VkBufferUsageFlags.VertexBuffer, VmaMemoryUsage.GpuToCpu);
+
         var iBuffer = new Buffer(1000, VkBufferUsageFlags.IndexBuffer, VmaMemoryUsage.GpuToCpu);
 
-        Vector3* vBufferMap = (Vector3*)vBuffer.Map();
+        Vector3* vBufferMap = (Vector3*)vPosBuffer.Map();
 
-        Vector3[] positions = new Vector3[4]
+        Vector3[] positions = 
             {
                 new Vector3(0.5f, -0.5f, 0.0f),
                 new Vector3(0.5f, 0.5f, 0.0f),
@@ -79,7 +90,7 @@ unsafe public static class Program
         {
             vBufferMap[i] = positions[i];
         }
-        vBuffer.Unmap();
+        vPosBuffer.Unmap();
 
         uint* indexPtr = (uint*)iBuffer.Map();
 
@@ -95,46 +106,19 @@ unsafe public static class Program
         indexPtr[5] = 0;
         iBuffer.Unmap();
 
-        float* bufferMap = (float*)buffer.Map();
+        float* bufferMap = (float*)vAttribBuffer.Map();
 
-        float[] colors = new float[16]
+        float[] colors = new float[20]
             {
-                1.0f, 0.0f, 0.5f, 0.0f,
-                1.0f, 0.5f, 0.0f, 0.0f,
-                1.0f, 0.5f, 0.0f, 0.0f,
-                1.0f, 0.0f, 0.5f, 0.0f,
+                1.0f, 0.0f, 0.5f, 0.0f, 0.0f,
+                1.0f, 0.5f, 0.0f, 0.0f, 0.0f,
+                1.0f, 0.5f, 0.0f, 0.0f, 0.0f,
+                1.0f, 0.0f, 0.5f, 0.0f, 0.0f,
             };
 
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < 20; i++)
         {
             bufferMap[i] = colors[i];
-        }
-        
-
-        Matrix4x4 CreatePerspectiveFieldOfView_ReverseZ(float fieldOfView, float aspectRatio, float nearPlaneDistance, float farPlaneDistance = float.PositiveInfinity)
-        {
-            var height = 1.0f / MathF.Tan(fieldOfView * 0.5f);
-            var width = height / aspectRatio;
-
-            var m33 = 0.0f;
-            var m43 = nearPlaneDistance;
-
-            if (float.IsFinite(farPlaneDistance))
-            {
-                var range = farPlaneDistance - nearPlaneDistance;
-
-                m33 = nearPlaneDistance / range;
-                m43 = nearPlaneDistance * farPlaneDistance / range;
-            }
-
-            return new Matrix4x4
-            {
-                M11 = width,
-                M22 = height,
-                M33 = m33,
-                M34 = -1.0f,
-                M43 = m43
-            };
         }
 
 
@@ -157,10 +141,13 @@ unsafe public static class Program
 
             Matrix4x4 perspectiveMat = Matrix4x4.CreatePerspectiveFieldOfView(1.6f, 4f / 3f, 0.1f, 10f);
 
-            Matrix4x4 viewMat = Matrix4x4.CreateFromYawPitchRoll(0.0f, 0f, 0.75f) * Matrix4x4.CreateFromYawPitchRoll((float)stopwatch.Elapsed.TotalSeconds, 0, 0) * Matrix4x4.CreateTranslation(new Vector3(0, 0, -4f));
+            Matrix4x4 viewMat = Matrix4x4.CreateFromYawPitchRoll(0.0f, 0f, (float)Math.PI / 4) * Matrix4x4.CreateFromYawPitchRoll((float)stopwatch.Elapsed.TotalSeconds, 0, 0) * Matrix4x4.CreateTranslation(new Vector3(0, 0, -4f));
 
-            *((Matrix4x4*)(bufferMap + 16)) = viewMat * perspectiveMat; // perspectiveMat * viewMat; // perspectiveMat;
 
+            
+            * ((Matrix4x4*)((float*)uBuffer.Map() + 16)) = viewMat * perspectiveMat; // perspectiveMat * viewMat; // perspectiveMat;
+
+            uBuffer.Unmap();
 
             int imageIndex = swapchain.AcquireNextImage(imageAvailableSemaphore);
             cmd.Begin();
@@ -168,7 +155,7 @@ unsafe public static class Program
 
             uint[] descriptorHandleValue = { 0, 0 };
 
-            cmd.PushConstants(buffer.DescriptorHandle);
+            cmd.PushConstants(uBuffer.DescriptorHandle);
 
             
 
@@ -219,7 +206,8 @@ unsafe public static class Program
 
             cmd.BindGraphicsPipeline(pipeline);
 
-            cmd.BindVertexBuffer(vBuffer, binding: 0);
+            cmd.BindVertexBuffer(vPosBuffer, binding: 0);
+            cmd.BindVertexBuffer(vAttribBuffer, binding: 1);
 
             cmd.BindIndexBuffer(iBuffer);
 
