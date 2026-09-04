@@ -1,3 +1,5 @@
 <Solution>
+  <Project Path="ExampleTriangle/ExampleTriangle.csproj" Id="8ecd5c4d-ac99-441d-83ea-205cfbaaf005" />
   <Project Path="S2V-RHI-Test/S2V-RHI-Test.csproj" />
+  <Project Path="Testing/Testing.csproj" Id="a15ee6f7-4775-4b83-9bbd-11d912321e07" />
 </Solution>
