@@ -8,7 +8,8 @@ extern const static int isPurple = 0;
 struct VSOutput
 {
     float4 position : SV_Position;
-    float3 color : COLOR0;
+    float3 color;
+    float2 texcoord;
 };
 
 struct Parameters
@@ -48,11 +49,14 @@ VSOutput vertMain(VertexInput vIn, uint vertexIndex: SV_VulkanVertexID)
     output.color = vIn.vColor.xyz;
     if (isPurple == 1)
         output.color = vIn.vColor.yzx;
+
+    output.texcoord = vIn.vTexCoord;
     return output;
 }
 
 [shader("fragment")]
 float4 fragMain(VSOutput input) : SV_Target
 {
-    return float4(input.color, 1.0);
+    //return float4(input.color, 1.0);
+    return DescriptorHandle<Sampler2D>(uint2(0,0)).SampleLevel(input.texcoord, 0); //float4(input.color, 1.0);
 }

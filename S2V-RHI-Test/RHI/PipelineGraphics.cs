@@ -120,7 +120,7 @@ namespace S2V_RHI_Test.RHI
                 // --- Input assembly: how vertices are grouped into primitives ---
                 VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo = new()
                 {
-                    topology = VkPrimitiveTopology.TriangleStrip,
+                    topology = VkPrimitiveTopology.TriangleList,
                     primitiveRestartEnable = false
                 };
 

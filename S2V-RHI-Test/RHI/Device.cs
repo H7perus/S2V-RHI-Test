@@ -50,10 +50,10 @@ namespace S2V_RHI_Test.RHI
     public class Device
     {
 
-        internal VkInstanceApi VkInstanceApi;
-        internal VkDeviceApi VkDeviceApi;
-        internal VkPhysicalDevice VkPhysicalDevice;
-        internal VkSurfaceKHR VkSurfaceKHR;
+        public VkInstanceApi VkInstanceApi;
+        public VkDeviceApi VkDeviceApi;
+        public VkPhysicalDevice VkPhysicalDevice;
+        public VkSurfaceKHR VkSurfaceKHR;
 
 
         private class BindlessManagerType
@@ -115,17 +115,62 @@ namespace S2V_RHI_Test.RHI
             }
         }
         private readonly BindlessManagerType BindlessManager = new();
-        internal VkDescriptorSetLayout SharedBindlessDescriptorSetLayout;
-        internal VkDescriptorSet SharedBindlessDescriptorSet;
-        internal VkPipelineLayout SharedPipelineLayout;
-        internal VkDescriptorPool SharedDescriptorPool;
+        public VkDescriptorSetLayout SharedBindlessDescriptorSetLayout;
+        public VkDescriptorSet SharedBindlessDescriptorSet;
+        public VkPipelineLayout SharedPipelineLayout;
+        public VkDescriptorPool SharedDescriptorPool;
 
-        internal QueueFamilyIndices QueueFamilyIndices;
+        public unsafe class SamplerCreateInfoComparer : IEqualityComparer<VkSamplerCreateInfo>
+        {
+            public bool Equals(VkSamplerCreateInfo x, VkSamplerCreateInfo y)
+            {
+                return x.magFilter == y.magFilter
+                    && x.minFilter == y.minFilter
+                    && x.mipmapMode == y.mipmapMode
+                    && x.addressModeU == y.addressModeU
+                    && x.addressModeV == y.addressModeV
+                    && x.addressModeW == y.addressModeW
+                    && x.mipLodBias == y.mipLodBias
+                    && x.anisotropyEnable == y.anisotropyEnable
+                    && x.maxAnisotropy == y.maxAnisotropy
+                    && x.compareEnable == y.compareEnable
+                    && x.compareOp == y.compareOp
+                    && x.minLod == y.minLod
+                    && x.maxLod == y.maxLod
+                    && x.borderColor == y.borderColor
+                    && x.unnormalizedCoordinates == y.unnormalizedCoordinates;
+                // deliberately ignoring sType and pNext
+            }
+
+            public int GetHashCode(VkSamplerCreateInfo info)
+            {
+                var hash = new HashCode();
+                hash.Add(info.magFilter);
+                hash.Add(info.minFilter);
+                hash.Add(info.mipmapMode);
+                hash.Add(info.addressModeU);
+                hash.Add(info.addressModeV);
+                hash.Add(info.addressModeW);
+                hash.Add(info.mipLodBias);
+                hash.Add(info.anisotropyEnable);
+                hash.Add(info.maxAnisotropy);
+                hash.Add(info.compareEnable);
+                hash.Add(info.compareOp);
+                hash.Add(info.minLod);
+                hash.Add(info.maxLod);
+                hash.Add(info.borderColor);
+                hash.Add(info.unnormalizedCoordinates);
+                return hash.ToHashCode();
+            }
+        }
+        public Dictionary<VkSamplerCreateInfo, VkSampler> Samplers = new Dictionary<VkSamplerCreateInfo, VkSampler>(new SamplerCreateInfoComparer());
+
+        public QueueFamilyIndices QueueFamilyIndices;
         private VkQueue _graphicsQueue;
-        internal VkQueue GraphicsQueue => _graphicsQueue;
+        public VkQueue GraphicsQueue => _graphicsQueue;
         private VkQueue _transferQueue;
-        internal VkQueue TransferQueue => _transferQueue;
-        internal VmaAllocator VmaAllocator;
+        public VkQueue TransferQueue => _transferQueue;
+        public VmaAllocator VmaAllocator;
 
         unsafe public Device(SDL_Window* window)
         {
@@ -240,7 +285,7 @@ namespace S2V_RHI_Test.RHI
             var queueCreateInfos = stackalloc VkDeviceQueueCreateInfo[2] { graphicsQueueCreateInfo, transferQueueCreateInfo };
 
 
-            string[] extensions = new string[] { "VK_KHR_swapchain" };
+            string[] extensions = new string[] { "VK_KHR_swapchain", "VK_EXT_image_view_min_lod" };
 
             VkStringArray extensionsArray = new VkStringArray(extensions);
 
@@ -339,6 +384,18 @@ namespace S2V_RHI_Test.RHI
             return indices;
         }
 
+        public VkSampler CreateSampler(VkSamplerCreateInfo samplerInfo)
+        {
+            if (Samplers.TryGetValue(samplerInfo, out var sampler))
+            {
+                return sampler;
+            }
+            RenderDevice!.VkDeviceApi.vkCreateSampler(samplerInfo, out sampler);
+            Samplers.Add(samplerInfo, sampler);
+            return sampler;
+        }
+
+
         public VkSemaphore CreateSemaphore()
         {
             VkDeviceApi.vkCreateSemaphore(out var semaphore);
@@ -403,7 +460,23 @@ namespace S2V_RHI_Test.RHI
             VkDeviceApi.vkQueueSubmit2(_graphicsQueue, submitInfo, fifFreed);
         }
 
-        internal unsafe uint GetBindlessSlot(VkDescriptorType descriptorType, VkBuffer bufferHandle)
+        unsafe public void SubmitTransfer(CommandList list, VkFence transferFinished)
+        {
+            VkCommandBufferSubmitInfo cmdBufferSubmitInfo = new VkCommandBufferSubmitInfo
+            {
+                commandBuffer = list.Handle
+            };
+
+            VkSubmitInfo2 submitInfo = new VkSubmitInfo2
+            {
+                commandBufferInfoCount = 1,
+                pCommandBufferInfos = &cmdBufferSubmitInfo,
+            };
+
+            VkDeviceApi.vkQueueSubmit2(_transferQueue, submitInfo, transferFinished);
+            
+        }
+        public unsafe uint GetBindlessSlot(VkDescriptorType descriptorType, VkBuffer bufferHandle)
         {
             var bindlessIndex = BindlessManager.GetFreeBindlessIndex((BindlessBindingIndex)descriptorType);
 
@@ -429,7 +502,54 @@ namespace S2V_RHI_Test.RHI
             return bindlessIndex;
         }
 
-        internal void FreeBindlessindex(VkDescriptorType descriptorType, uint index)
+        internal unsafe uint GetBindlessSlot(VkDescriptorType descriptorType, VkImageView imageViewHandle, VkSampler samplerHandle)
+        {
+            var bindlessIndex = BindlessManager.GetFreeBindlessIndex((BindlessBindingIndex)descriptorType);
+
+            VkDescriptorImageInfo imageInfo = new();
+            imageInfo.imageLayout = VkImageLayout.ShaderReadOnlyOptimal;
+            imageInfo.imageView = imageViewHandle;
+            imageInfo.sampler = samplerHandle;
+
+
+            VkWriteDescriptorSet write = new()
+            {
+                dstSet = RenderDevice!.SharedBindlessDescriptorSet,
+                dstBinding = 1,
+                dstArrayElement = bindlessIndex,
+                descriptorCount = 1,
+                descriptorType = VkDescriptorType.CombinedImageSampler,
+                pImageInfo = &imageInfo
+            };
+
+            RenderDevice!.VkDeviceApi.vkUpdateDescriptorSets(1, &write, 0, null);
+
+            return bindlessIndex; 
+        }
+
+        //Dangerous as hell though probably fine if it goes through an UpdateSampler mechanism for the texture
+        internal unsafe void UpdateBindlessCombinedSampler(VkImageView imageViewHandle, VkSampler samplerHandle, uint bindlessIndex)
+        {
+            VkDescriptorImageInfo imageInfo = new();
+            imageInfo.imageLayout = VkImageLayout.ShaderReadOnlyOptimal;
+            imageInfo.imageView = imageViewHandle;
+            imageInfo.sampler = samplerHandle;
+
+
+            VkWriteDescriptorSet write = new()
+            {
+                dstSet = RenderDevice!.SharedBindlessDescriptorSet,
+                dstBinding = 1,
+                dstArrayElement = bindlessIndex,
+                descriptorCount = 1,
+                descriptorType = VkDescriptorType.CombinedImageSampler,
+                pImageInfo = &imageInfo
+            };
+
+            RenderDevice!.VkDeviceApi.vkUpdateDescriptorSets(1, &write, 0, null);
+        }
+
+        internal void FreeBindlessSlot(VkDescriptorType descriptorType, uint index)
         {
             BindlessManager.FreeBindlessIndex((BindlessBindingIndex)descriptorType, index);
         }

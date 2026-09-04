@@ -7,7 +7,7 @@ using static Vortice.Vulkan.Vulkan;
 
 namespace S2V_RHI_Test.RHI
 {
-    internal unsafe class Swapchain : IDisposable
+    public unsafe class Swapchain : IDisposable
     {
         private VkSwapchainKHR _swapchain;
 

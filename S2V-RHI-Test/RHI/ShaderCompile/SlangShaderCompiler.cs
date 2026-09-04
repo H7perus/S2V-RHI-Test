@@ -125,7 +125,12 @@ namespace S2V_RHI_Test.RHI.ShaderCompile
         public SpecialisedShader SpecialiseAndCompile(SlangShaderModule shaderModule, IReadOnlyDictionary<string, int> arguments = null)
         {
             //guh, thats wild. Need sorting so we can traverse the arguments more easily.
-            var constantValues = (from entry in arguments orderby entry.Key ascending select entry).AsEnumerable();
+
+            var safeArguments = arguments ?? new Dictionary<string, int>();
+
+            var constantValues = safeArguments
+                .OrderBy(entry => entry.Key)
+                .ToList();
 
             var defaultCompileTimeConstantValues = shaderModule.CompileTimeConstants.Select(a => new CompileTimeConstantValue
             {

@@ -10,7 +10,9 @@ unsafe public class CommandList : IDisposable
 
     public VkCommandBuffer Handle { get; }
 
-    public CommandList()
+    public uint QueueFamilyIndex { get; private set; }
+
+    public CommandList(uint queueFamilyIndex)
     {
         var device = RenderDevice
             ?? throw new InvalidOperationException(
@@ -19,8 +21,10 @@ unsafe public class CommandList : IDisposable
         var poolInfo = new VkCommandPoolCreateInfo
         {
             flags = VkCommandPoolCreateFlags.ResetCommandBuffer,
-            queueFamilyIndex = device.QueueFamilyIndices.GraphicsFamily!.Value
+            queueFamilyIndex = queueFamilyIndex
         };
+
+        QueueFamilyIndex = queueFamilyIndex;
 
         var result = device.VkDeviceApi.vkCreateCommandPool(
             &poolInfo,
@@ -69,8 +73,8 @@ unsafe public class CommandList : IDisposable
                 Handle,
                 &beginInfo),
             "vkBeginCommandBuffer");
-
-        fixed (VkDescriptorSet* pSharedBindlessSet = &RenderDevice.SharedBindlessDescriptorSet)
+        if(device.QueueFamilyIndices.GraphicsFamily == QueueFamilyIndex)
+            fixed (VkDescriptorSet* pSharedBindlessSet = &RenderDevice.SharedBindlessDescriptorSet)
         {
             RenderDevice!.VkDeviceApi.vkCmdBindDescriptorSets(
                 Handle,
@@ -95,7 +99,7 @@ unsafe public class CommandList : IDisposable
 
     public void ClearSwapchainImage(
         VkImage image,
-        ref VkImageLayout currentLayout,
+        VkImageLayout currentLayout,
         VkClearColorValue color)
     {
         var device = RenderDevice!;
